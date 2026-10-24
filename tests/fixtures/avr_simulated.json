@@ -1,0 +1,13 @@
+{
+  "provenance": "SIMULATION ONLY. Numeric and source syntax from manufacturer 2013/2014 SR/NR references. No other model has been physically tested by the developer.",
+  "cases": [
+    {"command": "volume", "query": "MV?", "response": "MV005", "output": "0.5"},
+    {"command": "volume", "query": "MV?", "response": "MV795", "output": "79.5"},
+    {"command": "volume", "query": "MV?", "response": "MV805", "output": "80.5"},
+    {"command": "volume", "query": "MV?", "response": "MV00", "output": "0"},
+    {"command": "input", "query": "SI?", "response": "SISAT/CBL", "output": "SAT/CBL"},
+    {"command": "input", "query": "SI?", "response": "SINET/USB", "output": "NET/USB"},
+    {"command": "input", "query": "SI?", "response": "SIUSB DIRECT", "output": "USB DIRECT"},
+    {"command": "input", "query": "SI?", "response": "SIV.AUX", "output": "V.AUX"}
+  ]
+}

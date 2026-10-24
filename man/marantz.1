@@ -1,0 +1,296 @@
+.TH MARANTZ 1 "October 24, 2026" "marantz" "User Commands"
+.SH NAME
+marantz \- control compatible Marantz devices over TCP
+.SH SYNOPSIS
+.B marantz
+.RB [ \-\-debug ]
+.I command
+.RI [ arguments ...]
+.br
+.B marantz
+.BR \-h | \-\-help | help
+.SH DESCRIPTION
+Sends the shared Denon/Marantz ASCII control protocol over raw TCP,
+normally port 23. Each protocol command opens its own connection, sends a
+single carriage-return-terminated command, receives a matching response when
+available, and closes. Higher-level operations use sequential connections.
+There is no persistent session between invocations.
+.PP
+Implemented with Bash and a small Python 3 standard-library transport.
+No Homebrew packages, interactive telnet automation, or GUI are required.
+.PP
+MODEL 40n is the only device physically tested by the developer. Other models
+are documented candidates or experimental.
+Simulations do not certify hardware compatibility.
+Supports macOS (Intel/Apple Silicon) and Linux (AMD64/ARM64), with Bash 3.2+
+and Python 3.9+. Ubuntu 24.04 and Debian 12 have container verification;
+other Linux distributions remain unverified. Windows is unsupported.
+No netcat variant or GNU timeout utility is required.
+.PP
+Developed and tested on Marantz MODEL 40n. Compatibility with other Marantz
+devices is experimental or unverified unless explicitly documented.
+.SH COMMANDS
+.TP
+.B discover
+Perform fresh SSDP discovery and print candidates and addresses,
+with model and friendly name when metadata is available. Ignores explicit host
+selection and cached results for this search. No state changes or cache writes.
+Alias: devices.
+.TP
+.B identify
+Print discovered identity or Unknown, address and queried power state.
+Explicit hosts are not assigned a model without metadata.
+Alias: info.
+.TP
+.B capabilities
+Probe the four read-only queries independently. Valid replies are Observed;
+missing or malformed replies remain Unknown, not Unsupported. Control support
+stays Unknown because setters are not probed. Exit 0 if any query was observed,
+otherwise 1. Observations are not persisted or model-wide certification.
+.TP
+.B status
+Query power, volume, mute and input on four separate connections and print a
+summary. No state changes.
+.TP
+.BR "power" " [status]"
+Query power and print On or Standby.
+.TP
+.B power on
+Send PWON, poll PW? until On, and print On.
+.TP
+.BR "power off" " | " "power standby"
+Send PWSTANDBY, poll PW? until Standby, and print Standby.
+.TP
+.BR "volume" " [status]"
+Query MV? and print an integer or documented half-step encoded level.
+The compact query has no space. This is not universal dB or percentage.
+.TP
+.BR "volume up" " | " "volume down"
+Ensure power is on, send MVUP or MVDOWN, then query and print the new volume.
+.TP
+.BI "volume set " LEVEL
+Ensure power is on, send an integer volume command, then query and print volume.
+Only decimal integers are accepted for settings. Values below ten use MV07.
+This padding and all state-changing behavior require manual device verification.
+Half-step setting is not supported; query MV795 is displayed as 79.5.
+.TP
+.BI "volume " LEVEL
+Shorthand for volume set LEVEL.
+.TP
+.BR vol " | " v
+Aliases for volume; all volume arguments are accepted.
+.TP
+.BR "mute" " [status]"
+Query MU? and print On or Off.
+.TP
+.BR "mute on" " | " "mute off"
+Send MUON or MUOFF, query MU?, and print the resulting state.
+.TP
+.B mute toggle
+Query MU?, send the opposite mute state, query again, and print the result.
+.TP
+.BR "input" " [status]"
+Query SI? and print the source token, such as NET.
+Source setting is unavailable.
+.TP
+.B reboot
+Query power, enter standby, confirm standby, wait the configured delay, power
+on, and confirm On. Prints progress. Stops on a failure; it does not continue
+to power on if standby cannot be confirmed.
+.TP
+.BI "raw " COMMAND
+Send one nonempty, literal printable ASCII command, at most 1024 bytes, followed
+by CR. Print the first complete response frame and disconnect. Quote COMMAND
+in the calling shell. Embedded CR, LF and control characters are rejected.
+The utility never executes the argument locally. A command without a response
+fails after the response timeout, although its device action may have occurred.
+.TP
+.B \-\-debug
+Place before COMMAND to print transmitted commands and accepted response frames
+to standard error. Standard output retains the normal concise result.
+.TP
+.BR \-h " | " \-\-help " | " help
+Display full help without opening a network connection.
+.SH POWER READINESS
+Volume changes first require a valid MV? reply, then query PW?. If Standby,
+send PWON once, wait the configurable delay, then poll until On. Polling checks
+power state, not audio or network-subsystem readiness. State-changing commands
+are never retried after ambiguous failures. Read-only power polling can retry
+transport failures within its deadline.
+.PP
+Power and mute writes also require their corresponding query. A valid query
+does not prove setter availability. Explicit mute and absolute-volume changes
+fail if state confirmation disagrees. No setter is automatically replayed.
+.SH DEVICE DISCOVERY
+Normal commands require no setup files. Use an explicit MARANTZ_HOST from the
+environment first. Otherwise use the validated last-known device from the
+disposable cache. If the cache is missing or unavailable, perform automatic
+SSDP discovery and cache a successfully discovered device for future commands.
+An explicit host failure never switches to a different receiver.
+.PP
+SSDP uses UDP multicast 239.255.255.250:1900 with search target
+urn:schemas-denon-com:device:ACT-Denon:1 and standard upnp:rootdevice.
+Both use MX: 1.
+At most three pairs per active IPv4 interface fit within one collection
+deadline,
+including sends. Interface enumeration uses OS addresses, with no fixed names,
+up to 32 interfaces. An unusable interface does not prevent trying others.
+Broad root responses need Marantz/Denon manufacturer metadata.
+UPnP description metadata identifies devices. HTTP metadata requests are bounded
+and restricted to the response sender IP, without redirects or proxies.
+No full subnet port scan is performed. OS multicast routing is the fallback if
+interface enumeration is unavailable. Allow LAN multicast and unicast
+SSDP replies.
+.PP
+No model is silently preferred. Multiple candidates require MARANTZ_HOST or an
+exact MARANTZ_DEVICE name, model, UDN or address. Duplicate matches fail.
+A sole selected candidate must answer PW?; discovery alone is not compatibility.
+.PP
+Use a .local hostname exactly like an IP; macOS resolves it through Bonjour.
+Linux needs working mDNS/NSS configuration, often Avahi, or use an IP address.
+No specific hostname is assumed. Automatic discovery does not
+parse a long-running dns-sd process or browse guessed Bonjour service types.
+.SH CACHE
+Successfully discovered and protocol-validated addresses with UPnP identity
+metadata are saved in ~/Library/Caches/marantz/device.json on macOS, or
+${XDG_CACHE_HOME:-$HOME/.cache}/marantz/device.json on Linux.
+Empty, relative or control-containing XDG paths fall back to $HOME/.cache.
+Missing or invalid HOME falls back to the OS account home. macOS ignores XDG.
+No configuration file or ~/.config directory is required.
+Each use checks age,
+refetches identity metadata and probes PW? within a bounded validation deadline.
+Unreachable, changed, corrupt, expired or port-mismatched entries trigger fresh
+discovery. If an expired entry exists and multicast fails or returns nothing,
+it can be reused only after fresh HTTP identity and TCP validation both pass.
+This supports VPN multicast failures, never masks ambiguity or changed identity,
+and is not cryptographic authentication. Reuse does not extend the timestamp.
+Without identity metadata the address is not cached. Cache write failures are
+non-fatal. The cache is disposable state, not a settings file. Missing cache
+directories are recreated automatically. Deleting the cache is safe and simply
+causes rediscovery on the next normal command. No manual cache management is
+required. The discover command performs a fresh diagnostic search.
+Uninstall preserves the cache and other user files.
+.SH ENVIRONMENT
+.TP
+.B XDG_CACHE_HOME
+Linux-only cache base, an absolute path; default $HOME/.cache.
+Ignored on macOS. Cache writes are best-effort.
+.TP
+.B MARANTZ_HOST
+Explicit IP address or hostname, including .local. Default: unset (automatic).
+.TP
+.B MARANTZ_DEVICE
+Exact discovery name, model, UDN or address ignoring case; default unset.
+Constrains cache reuse. MARANTZ_HOST takes precedence. Duplicate matches fail.
+.TP
+.B MARANTZ_DISCOVERY_TIMEOUT
+Seconds for SSDP responses and a separate overall metadata budget. Default: 3.
+.TP
+.B MARANTZ_VERIFY_TIMEOUT
+Seconds for total cached identity/protocol validation, or a discovered-device
+PW? probe. Default: 1.
+.TP
+.B MARANTZ_CACHE_TTL
+Soft freshness, integer seconds 0 through 3600. Default: 300.
+Zero disables cache reads/writes. Expired fallback requires fresh validation.
+.TP
+.B MARANTZ_PORT
+TCP port, 1 through 65535. Default: 23.
+.TP
+.B MARANTZ_CONNECT_TIMEOUT
+Deadline for resolution and connection establishment, in seconds. Default: 2.
+.TP
+.B MARANTZ_RESPONSE_TIMEOUT
+Deadline for sending and receiving a response, in seconds. Default: 2.
+A setter with no acknowledgement is followed by an independent state query.
+.TP
+.B MARANTZ_POWER_TIMEOUT
+Maximum seconds per power-state polling phase, integer 1 through 300.
+Default: 20. Initial queries, setters, stabilization and reboot delay are
+separately bounded. Reboot has two polling phases.
+.TP
+.B MARANTZ_POLL_INTERVAL
+Seconds between power polls. Default: 0.5.
+.TP
+.B MARANTZ_STABILIZE_DELAY
+Seconds after any PWON before the next command. Default: 4, covering an older
+documented SR/NR requirement. Newer families may need less; owner verification
+is required before reducing it. This does not prove audio readiness.
+.TP
+.B MARANTZ_REBOOT_DELAY
+Seconds between confirmed standby and power on during reboot. Default: 2.
+.TP
+.BR MARANTZ_VOLUME_MIN " and " MARANTZ_VOLUME_MAX
+Integer setting policy, default 0 through 98, configurable within 0 through 99.
+This is a conservative two-digit CLI policy, not a verified MODEL 40n hardware
+range. This policy applies to absolute settings, not relative or raw commands.
+Query output is not constrained by it. Half-step replies are accepted; minimum
+codes and dB offsets remain model-specific.
+.PP
+Decimal timeouts and poll interval must be 0.01 through 300 seconds; delays
+may also be zero. No network operation waits forever, even if bytes trickle in.
+.SH EXAMPLES
+.nf
+marantz discover
+marantz identify
+marantz capabilities
+marantz status
+marantz power
+marantz v up
+marantz volume set 10
+marantz mute toggle
+marantz input
+marantz reboot
+marantz raw 'MV?'
+marantz \-\-debug status
+MARANTZ_HOST=192.0.2.10 marantz status
+MARANTZ_HOST=some-device.local marantz status
+.fi
+.SH EXIT STATUS
+.TP
+.B 0
+Success, including help.
+.TP
+.B 1
+Environment, dependency, network, response or readiness failure.
+Also discovery failure, ambiguity, or no devices found.
+.TP
+.B 2
+Invalid CLI command, argument or volume level.
+.SH WARNINGS
+Reboot means standby to on. It is not a factory reset and may not restart
+the network subsystem, which can stay active in standby. No reset or
+reset-to-defaults command is implemented.
+.PP
+Raw mode is an expert escape hatch and transmits the supplied bytes. Use only
+known safe protocol commands; the tool does not assign semantics to arbitrary
+raw commands. Never send reset or destructive configuration payloads.
+.PP
+TCP control may be unauthenticated and is unencrypted. Never expose it publicly.
+A connection
+failure after sending can leave device state changed. Check status before
+manually repeating a relative change or toggle. Only the reported PWON,
+PWSTANDBY, MV10, MUON, MUOFF and SINET query formats are device-verified.
+.SH FILES
+.I ~/Library/Caches/marantz/device.json
+.br
+.I ${XDG_CACHE_HOME:-$HOME/.cache}/marantz/device.json
+.br
+.I /usr/local/bin/marantz
+.br
+.I /usr/local/libexec/marantz-transport.py
+.br
+.I /usr/local/libexec/marantz-discovery.py
+.br
+.I /usr/local/share/man/man1/marantz.1
+.SH INSTALLATION
+On macOS and Linux, run install.sh with optional --prefix and an absolute path.
+Default: /usr/local. A user-local prefix such as $HOME/.local needs no sudo.
+Add PREFIX/bin to PATH and use man -M PREFIX/share/man marantz if necessary.
+Repeated installation atomically replaces each of the four known files;
+uninstall.sh with the same prefix removes only those files and retains
+the cache.
+The scripts do not install dependencies or invoke sudo automatically.
+.SH SEE ALSO
+.BR bash (1),
+.BR python3 (1)

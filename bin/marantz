@@ -1,0 +1,325 @@
+#!/bin/bash
+# Compatible with macOS Bash 3.2. Optional overrides come from the environment.
+set -u
+export LC_ALL=C
+
+die() { printf 'marantz: %s\n' "$*" >&2; exit 1; }
+usage_error() { printf 'marantz: %s (see marantz --help)\n' "$*" >&2; exit 2; }
+print_help() {
+    cat <<'HELP'
+Usage: marantz [--debug] COMMAND [ARGS...]
+Control compatible Marantz devices with one short connection per command.
+MODEL 40n is the only device physically tested by the developer.
+
+  status                   Show power, volume, mute and input
+  discover                 Find and list HEOS / Denon / Marantz devices via SSDP
+  identify                 Show discovered identity (or Unknown) and address
+  devices / info           Aliases for discover / identify
+  capabilities             Observe query support; untested controls stay Unknown
+  power [status]           Print On or Standby
+  power on                 Power on, wait and confirm
+  power off|standby        Enter standby and confirm
+  volume [status]          Print numeric volume
+  volume up|down           Ensure power is on, change volume and query
+  volume set LEVEL         Set integer volume after ensuring power is on
+  volume LEVEL             Shorthand for volume set LEVEL
+  vol ... / v ...          Volume aliases
+  mute [status]            Print On or Off
+  mute on|off|toggle       Change mute and query
+  input [status]           Print input (read-only, e.g. NET)
+  reboot                   Soft power cycle: standby -> on
+  raw COMMAND              Send one literal protocol command; print first frame
+  --debug COMMAND...       Print TX/RX information to stderr
+  -h / --help / help       Display this help
+
+Receiver discovery is automatic; no setup file is required.
+Optional environment overrides and defaults:
+  MARANTZ_HOST=(automatic)    MARANTZ_PORT=23
+  MARANTZ_DISCOVERY_TIMEOUT=3 MARANTZ_VERIFY_TIMEOUT=1
+  MARANTZ_CACHE_TTL=300
+  MARANTZ_DEVICE=(unset)     Exact discovered name, model, UDN or address
+  MARANTZ_CONNECT_TIMEOUT=2   MARANTZ_RESPONSE_TIMEOUT=2  (seconds)
+  MARANTZ_POWER_TIMEOUT=20    MARANTZ_POLL_INTERVAL=0.5
+  MARANTZ_STABILIZE_DELAY=4    MARANTZ_REBOOT_DELAY=2
+  MARANTZ_VOLUME_MIN=0        MARANTZ_VOLUME_MAX=98
+The volume range is a configurable policy, not a verified device limit.
+Queries accept documented half-step responses; absolute settings are integers.
+Reboot is not a factory reset and may not restart networking.
+Requires macOS or Linux, Bash 3.2+ and Python 3.9 (standard library only).
+Host priority: MARANTZ_HOST environment -> validated cache -> SSDP discovery.
+Cache on macOS: ~/Library/Caches/marantz/
+Cache on Linux: ${XDG_CACHE_HOME:-$HOME/.cache}/marantz/
+Deleting the disposable cache causes rediscovery.
+Use marantz discover to perform a fresh search and list devices.
+Ambiguity requires MARANTZ_HOST or MARANTZ_DEVICE; no subnet scan is used.
+
+Examples:
+  marantz status
+  marantz discover
+  marantz v up
+  marantz volume set 10
+  MARANTZ_HOST=192.0.2.10 marantz --debug status
+  marantz raw 'MV?'
+HELP
+}
+
+debug=0
+if [ "${1-}" = --debug ]; then debug=1; shift; fi
+case "${1-}" in -h|--help|help) [ "$#" -eq 1 ] || usage_error 'Help takes no arguments'; print_help; exit 0 ;; esac
+[ "$#" -gt 0 ] || { print_help; exit 0; }
+
+# Environment overrides defaults. Only explicitly supplied hosts bypass discovery.
+host_source=automatic
+[ "${MARANTZ_HOST+x}" != x ] || host_source=environment
+: "${MARANTZ_HOST=}" "${MARANTZ_PORT=23}"
+: "${MARANTZ_DISCOVERY_TIMEOUT=3}" "${MARANTZ_VERIFY_TIMEOUT=1}"
+: "${MARANTZ_CACHE_TTL=300}"
+: "${MARANTZ_DEVICE=}"
+if [[ $MARANTZ_DEVICE == *[!\ -~]* ]] || [ "${#MARANTZ_DEVICE}" -gt 160 ]; then die 'Invalid MARANTZ_DEVICE'; fi
+: "${MARANTZ_CONNECT_TIMEOUT=2}" "${MARANTZ_RESPONSE_TIMEOUT=2}"
+: "${MARANTZ_POWER_TIMEOUT=20}" "${MARANTZ_POLL_INTERVAL=0.5}"
+: "${MARANTZ_STABILIZE_DELAY=4}" "${MARANTZ_REBOOT_DELAY=2}"
+# Configurable setting policy, not a verified hardware range. The supported
+# integer setting encoding uses two digits; half-step writes stay disabled.
+: "${MARANTZ_VOLUME_MIN=0}" "${MARANTZ_VOLUME_MAX=98}"
+
+integer() { [[ $1 =~ ^[0-9]+$ ]] && [ "${#1}" -le 5 ]; }
+decimal() { [[ $1 =~ ^[0-9]+([.][0-9]+)?$ ]] && [ "${#1}" -le 8 ]; }
+valid_host() { [[ $1 =~ ^[a-zA-Z0-9:][a-zA-Z0-9.:%_-]*$ ]]; }
+if [ "$host_source" != automatic ]; then valid_host "$MARANTZ_HOST" || die 'Invalid MARANTZ_HOST'; fi
+integer "$MARANTZ_CACHE_TTL" || die 'Invalid MARANTZ_CACHE_TTL'
+MARANTZ_CACHE_TTL=$((10#$MARANTZ_CACHE_TTL))
+[ "$MARANTZ_CACHE_TTL" -le 3600 ] || die 'MARANTZ_CACHE_TTL must be 0..3600 seconds'
+integer "$MARANTZ_PORT" || die 'Invalid MARANTZ_PORT'
+MARANTZ_PORT=$((10#$MARANTZ_PORT))
+if [ "$MARANTZ_PORT" -lt 1 ] || [ "$MARANTZ_PORT" -gt 65535 ]; then die 'MARANTZ_PORT must be 1..65535'; fi
+for key in MARANTZ_CONNECT_TIMEOUT MARANTZ_RESPONSE_TIMEOUT MARANTZ_POLL_INTERVAL MARANTZ_STABILIZE_DELAY MARANTZ_REBOOT_DELAY MARANTZ_DISCOVERY_TIMEOUT MARANTZ_VERIFY_TIMEOUT; do
+    value=${!key}
+    decimal "$value" || die "Invalid $key"
+    # awk is built into macOS; bound both network waits and user-configurable sleeps.
+    case "$key" in MARANTZ_STABILIZE_DELAY|MARANTZ_REBOOT_DELAY) minimum=0 ;; *) minimum=0.01 ;; esac
+    awk -v v="$value" -v m="$minimum" 'BEGIN { exit !(v >= m && v <= 300) }' || die "$key must be $minimum..300 seconds"
+done
+integer "$MARANTZ_POWER_TIMEOUT" || die 'Invalid MARANTZ_POWER_TIMEOUT'
+MARANTZ_POWER_TIMEOUT=$((10#$MARANTZ_POWER_TIMEOUT))
+if [ "$MARANTZ_POWER_TIMEOUT" -lt 1 ] || [ "$MARANTZ_POWER_TIMEOUT" -gt 300 ]; then die 'MARANTZ_POWER_TIMEOUT must be 1..300 seconds'; fi
+for key in MARANTZ_VOLUME_MIN MARANTZ_VOLUME_MAX; do
+    integer "${!key}" || die "Invalid $key"
+    printf -v "$key" '%d' "$((10#${!key}))"
+done
+if [ "$MARANTZ_VOLUME_MIN" -gt "$MARANTZ_VOLUME_MAX" ] || [ "$MARANTZ_VOLUME_MAX" -gt 99 ]; then
+    die 'Volume policy must satisfy 0 <= MIN <= MAX <= 99 (two-digit integer encoding)'
+fi
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || die 'Cannot find script directory'
+transport=$script_dir/../libexec/marantz-transport.py
+discovery=$script_dir/../libexec/marantz-discovery.py
+[ -f "$transport" ] || die "Missing transport helper: $transport"
+[ -f "$discovery" ] || die "Missing discovery helper: $discovery"
+python=$(command -v python3) || die 'Python 3.9+ is required on PATH (see README.md for macOS/Linux dependencies)'
+
+discover_devices() {
+    "$python" "$discovery" "$1" "$MARANTZ_PORT" "$MARANTZ_DISCOVERY_TIMEOUT" "$MARANTZ_VERIFY_TIMEOUT" "$MARANTZ_CACHE_TTL" "$debug" "$MARANTZ_DEVICE"
+}
+host_resolved=0
+device_name=Unknown
+resolve_host() {
+    [ "$host_resolved" -eq 0 ] || return 0
+    if [ "$host_source" = automatic ]; then
+        local resolved
+        resolved=$(discover_devices resolve-info) || return 1
+        MARANTZ_HOST=${resolved%%$'\n'*}
+        device_name=${resolved#*$'\n'}
+        valid_host "$MARANTZ_HOST" || die 'Discovery returned an invalid address'
+    elif [ "$debug" -eq 1 ]; then
+        printf 'Discovery: %s\nAddress: %s\n' "$host_source" "$MARANTZ_HOST" >&2
+    fi
+    host_resolved=1
+}
+send_command() {
+    local command=$1 mode=$2 prefix=${3-} connect=$MARANTZ_CONNECT_TIMEOUT receive=$MARANTZ_RESPONSE_TIMEOUT
+    resolve_host || return 1
+    if [ "${poll_budget-}" ]; then
+        connect=$(awk -v a="$connect" -v b="$poll_budget" 'BEGIN { print (a < b/2 ? a : b/2) }')
+        receive=$(awk -v a="$receive" -v b="$poll_budget" 'BEGIN { print (a < b/2 ? a : b/2) }')
+    fi
+    [ "$debug" -eq 0 ] || printf 'TX: %s\n' "$command" >&2
+    response=$("$python" "$transport" "$MARANTZ_HOST" "$MARANTZ_PORT" "$command" "$mode" "$prefix" "$connect" "$receive") || return 1
+    if [ "$debug" -eq 1 ]; then
+        if [ -n "$response" ]; then printf 'RX: %s\n' "$response" >&2; else printf 'RX: (no acknowledgement)\n' >&2; fi
+    fi
+}
+query_power() {
+    send_command 'PW?' query PW || return 1
+    case "$response" in PWON) result=On ;; PWSTANDBY) result=Standby ;; *) die 'Malformed power response' ;; esac
+}
+query_volume() {
+    send_command 'MV?' query MV || return 1
+    [[ $response =~ ^MV([0-9][0-9])(5)?$ ]] || die 'Malformed or unsupported volume response (expected two digits, optionally followed by 5)'
+    local fraction=${BASH_REMATCH[2]}
+    result=$((10#${BASH_REMATCH[1]}))
+    [ -z "$fraction" ] || result=$result.5
+}
+query_mute() {
+    send_command 'MU?' query MU || return 1
+    case "$response" in MUON) result=On ;; MUOFF) result=Off ;; *) die 'Malformed mute response' ;; esac
+}
+query_input() {
+    send_command 'SI?' query SI || return 1
+    [[ $response =~ ^SI([A-Z0-9][A-Z0-9\ /._+-]*)$ ]] || die 'Malformed input response'
+    result=${response#SI}
+}
+wait_for_power_state() {
+    local target=$1 deadline=$((SECONDS + MARANTZ_POWER_TIMEOUT)) remaining
+    while :; do
+        remaining=$((deadline - SECONDS))
+        [ "$remaining" -gt 0 ] || die "Timed out waiting for power state $target"
+        poll_budget=$remaining
+        if query_power; then
+            unset poll_budget
+            [ "$result" != "$target" ] || return 0
+        else
+            unset poll_budget
+        fi
+        remaining=$((deadline - SECONDS))
+        [ "$remaining" -gt 0 ] || die "Timed out waiting for power state $target"
+        sleep "$(awk -v a="$MARANTZ_POLL_INTERVAL" -v b="$remaining" 'BEGIN { print (a < b ? a : b) }')"
+    done
+}
+ensure_power_on() {
+    query_power || return 1
+    if [ "$result" = Standby ]; then
+        power_on_command || return 1
+        wait_for_power_state On || return 1
+    fi
+}
+power_on_command() {
+    send_command PWON optional PW || return 1
+    # The 2013 SR/NR protocol specifies four seconds before the next command.
+    # Newer documented families may need less; owners can override this delay.
+    sleep "$MARANTZ_STABILIZE_DELAY"
+}
+confirm_result() {
+    [ "$result" = "$1" ] || die 'Receiver did not confirm the requested state; check status before retrying'
+}
+observe_capability() {
+    local label=$1 query=$2 observed
+    # A failed or missing response cannot prove that a feature is unsupported.
+    if observed=$("$query" && printf '%s' "$result"); then
+        printf '%-15s Observed (%s)\n' "$label query:" "$observed"
+        observed_count=$((observed_count + 1))
+    else
+        printf '%-15s Unknown\n' "$label query:"
+    fi
+}
+validate_level() {
+    integer "$1" || usage_error 'Volume must be an integer'
+    level=$((10#$1))
+    if [ "$level" -lt "$MARANTZ_VOLUME_MIN" ] || [ "$level" -gt "$MARANTZ_VOLUME_MAX" ]; then usage_error "Volume must be $MARANTZ_VOLUME_MIN..$MARANTZ_VOLUME_MAX"; fi
+    printf -v volume_command 'MV%02d' "$level"
+}
+
+command=$1; shift
+case "$command" in
+    discover|devices)
+        [ "$#" -eq 0 ] || usage_error 'discover takes no arguments'
+        discover_devices discover || exit 1
+        ;;
+    identify|info)
+        [ "$#" -eq 0 ] || usage_error 'identify takes no arguments'
+        resolve_host || exit 1
+        query_power || exit 1
+        printf 'Device:  %s\nAddress: %s\nPower:   %s\n' "$device_name" "$MARANTZ_HOST" "$result"
+        ;;
+    capabilities)
+        [ "$#" -eq 0 ] || usage_error 'capabilities takes no arguments'
+        resolve_host || exit 1
+        observed_count=0
+        observe_capability Power query_power
+        observe_capability Volume query_volume
+        observe_capability Mute query_mute
+        observe_capability Input query_input
+        printf 'Power control:  Unknown (not probed)\nVolume control: Unknown (not probed)\nMute control:   Unknown (not probed)\nInput control:  Not implemented\n'
+        [ "$observed_count" -gt 0 ] || exit 1
+        ;;
+    status)
+        [ "$#" -eq 0 ] || usage_error 'status takes no arguments'
+        query_power || exit 1; power=$result
+        query_volume || exit 1; volume=$result
+        query_mute || exit 1; mute=$result
+        query_input || exit 1
+        if [ "$device_name" = Unknown ]; then device_name=Marantz; fi
+        printf '%s\nPower:   %s\nVolume:  %s\nMute:    %s\nInput:   %s\n' "$device_name" "$power" "$volume" "$mute" "$result"
+        ;;
+    power)
+        [ "$#" -le 1 ] || usage_error 'power takes at most one argument'
+        case "${1-status}" in
+            status) query_power || exit 1 ;;
+            on) query_power && power_on_command && wait_for_power_state On || exit 1 ;;
+            off|standby) query_power && send_command PWSTANDBY optional PW && wait_for_power_state Standby || exit 1 ;;
+            *) usage_error 'Unknown power action' ;;
+        esac
+        printf '%s\n' "$result"
+        ;;
+    volume|vol|v)
+        [ "$#" -le 2 ] || usage_error 'Too many volume arguments'
+        case "${1-status}" in
+            status) [ "$#" -le 1 ] || usage_error 'volume status takes no level'; query_volume || exit 1 ;;
+            up|down)
+                [ "$#" -eq 1 ] || usage_error 'volume up/down takes no level'
+                if [ "$1" = up ]; then volume_command=MVUP; else volume_command=MVDOWN; fi
+                query_volume && ensure_power_on && send_command "$volume_command" optional MV && query_volume || exit 1
+                ;;
+            set)
+                [ "$#" -eq 2 ] || usage_error 'volume set requires LEVEL'
+                validate_level "$2"
+                query_volume && ensure_power_on && send_command "$volume_command" optional MV && query_volume || exit 1
+                confirm_result "$level"
+                ;;
+            *)
+                [ "$#" -eq 1 ] || usage_error 'volume LEVEL takes one level'
+                validate_level "$1"
+                query_volume && ensure_power_on && send_command "$volume_command" optional MV && query_volume || exit 1
+                confirm_result "$level"
+                ;;
+        esac
+        printf '%s\n' "$result"
+        ;;
+    mute)
+        [ "$#" -le 1 ] || usage_error 'mute takes at most one argument'
+        case "${1-status}" in
+            status) query_mute || exit 1 ;;
+            on|off|toggle)
+                action=$1
+                query_mute || exit 1
+                if [ "$action" = toggle ]; then if [ "$result" = On ]; then action=off; else action=on; fi; fi
+                if [ "$action" = on ]; then mute_command=MUON; else mute_command=MUOFF; fi
+                send_command "$mute_command" optional MU && query_mute || exit 1
+                if [ "$action" = on ]; then confirm_result On; else confirm_result Off; fi
+                ;;
+            *) usage_error 'Unknown mute action' ;;
+        esac
+        printf '%s\n' "$result"
+        ;;
+    input)
+        if [ "$#" -gt 1 ] || [ "${1-status}" != status ]; then usage_error 'input is read-only; use input or input status'; fi
+        query_input || exit 1; printf '%s\n' "$result"
+        ;;
+    raw)
+        if [ "$#" -ne 1 ] || [ -z "${1-}" ]; then usage_error 'raw requires one non-empty COMMAND argument'; fi
+        [[ $1 != *$'\r'* && $1 != *$'\n'* && $1 != *[!\ -~]* ]] || usage_error 'raw requires one printable ASCII command without CR or LF'
+        [ "${#1}" -le 1024 ] || usage_error 'raw command is too long'
+        send_command "$1" raw '' || exit 1; printf '%s\n' "$response"
+        ;;
+    reboot)
+        [ "$#" -eq 0 ] || usage_error 'reboot takes no arguments'
+        query_power || exit 1
+        printf 'Putting Marantz into standby...\n'
+        send_command PWSTANDBY optional PW && wait_for_power_state Standby || exit 1
+        sleep "$MARANTZ_REBOOT_DELAY"
+        printf 'Powering Marantz back on...\n'
+        power_on_command && wait_for_power_state On || exit 1
+        printf 'Marantz is online.\n'
+        ;;
+    *) usage_error "Unknown command: $command" ;;
+esac

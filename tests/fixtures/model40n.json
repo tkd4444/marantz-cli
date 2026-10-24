@@ -1,0 +1,11 @@
+{
+  "provenance": "Developer-supplied physical MODEL 40n query observations; the only physically tested device. Setter behavior is not certified by these fixtures.",
+  "cases": [
+    {"command": "power", "query": "PW?", "response": "PWON", "output": "On"},
+    {"command": "power", "query": "PW?", "response": "PWSTANDBY", "output": "Standby"},
+    {"command": "volume", "query": "MV?", "response": "MV10", "output": "10"},
+    {"command": "mute", "query": "MU?", "response": "MUON", "output": "On"},
+    {"command": "mute", "query": "MU?", "response": "MUOFF", "output": "Off"},
+    {"command": "input", "query": "SI?", "response": "SINET", "output": "NET"}
+  ]
+}

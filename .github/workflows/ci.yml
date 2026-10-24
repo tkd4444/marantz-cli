@@ -1,0 +1,41 @@
+name: macOS and Linux checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Python 3.9's official macOS tool-cache build is x64. macOS 14 is retiring.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, ubuntu-24.04]
+        python: ['3.9', '3.14']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Linux check dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mandoc man-db shellcheck
+      - name: macOS check dependencies
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v shellcheck >/dev/null; then brew install shellcheck; fi
+          command -v mandoc
+          command -v man
+      - name: Require shell lint
+        run: shellcheck --version
+      - name: Source, documentation, install and loopback receiver checks
+        run: ./tests/check.sh
