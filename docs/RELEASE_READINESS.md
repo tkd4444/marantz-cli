@@ -29,14 +29,14 @@ fixtures are test inputs, not real receiver endpoints or credentials.
 
 ## Verification status
 
-- Current suite: 103 tests; all original 84 test methods remain.
-- Native macOS release-copy checks: 103 run, 101 passed and 2 Linux-only
+- Current suite: 104 tests; all original 84 test methods remain.
+- Native macOS release-copy checks: 104 run, 102 passed and 2 Linux-only
   integration tests skipped; Apple Bash 3.2/Python 3.9, empty HOME. The final
-  licensed-tree rerun passed in 81.817 seconds. One earlier local 1.5-second
+  licensed-tree rerun passed in 75.426 seconds. One earlier local 1.5-second
   discovery wall-clock assertion failed once; six unchanged focused reruns and
   the full rerun passed. No deadline assertion or application behavior was changed.
 - Official-image release-copy matrix: Ubuntu 24.04 ARM64, Ubuntu 24.04 AMD64
-  (emulated) and Debian 12 ARM64 each passed all 103 tests, without skips.
+  (emulated) and Debian 12 ARM64 each passed all 104 tests, without skips.
 - Source syntax/links, ShellCheck, all help forms, manual lint/render, installed
   manual, upgrades/repeated installation and uninstall checks passed.
 - Gitleaks 8.30.1 directory scan found no secrets; targeted privacy review
@@ -44,8 +44,9 @@ fixtures are test inputs, not real receiver endpoints or credentials.
   development artifacts in the selected public files. Eight ignore-rule samples passed.
 - Author/committer preflight uses public login tkd4444 and user-confirmed
   28397501+tkd4444@users.noreply.github.com. GitHub API and SSH identities match.
-  Only a fresh initial commit of the curated tree is eligible for the remote;
-  verify its author/committer metadata and reachable history before pushing.
+  The remote contains only newly curated history: the clean initial commit and
+  required CI corrections, each using this same public identity. No development
+  history or original author metadata is imported.
 - Hosted GitHub Actions is a separate publication gate. Inspect the completed
   checks for the exact release commit in the repository Actions runs; this local
   report does not substitute for those observed results.
@@ -54,6 +55,23 @@ All device simulations use loopback TCP/UDP/HTTP. No physical receiver is contac
 and no system installation is modified. Installation tests use temporary prefixes,
 including upgrades, repeated installation and uninstall preservation. The full
 matrix and scope are in [PLATFORMS.md](PLATFORMS.md).
+
+## Hosted CI correction
+
+The [first hosted run](https://github.com/tkd4444/marantz-cli/actions/runs/40084083703)
+passed Ubuntu/Python 3.9 and 3.14 plus macOS/Python 3.9. macOS/Python 3.14 exposed
+an actual race: a socket timeout could win just before SIGALRM, leaving the alarm
+armed while the exception handler printed diagnostics. The late signal then
+produced a traceback instead of the expected concise error.
+
+The correction cancels the transaction timer in an inner finally block before
+outer exception handling. Connection lifetime, deadline budgets and no-replay
+behavior remain intact. One deterministic regression covers six query/raw
+combinations of timeout, receive error and connection error: all six failed before
+the correction and pass afterward. The full 104-test suite then passed locally
+and in all three required Linux containers. Publication still requires a fully
+successful hosted run for the corrected commit; use the repository Actions runs
+as the authoritative result.
 
 ## Publication gates
 

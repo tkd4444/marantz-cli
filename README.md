@@ -275,7 +275,8 @@ untouched. It exits nonzero for failures, including unavailable emulation.
 
 GitHub Actions covers `macos-15-intel` and `ubuntu-24.04`, each with Python 3.9
 and 3.14, including ShellCheck, manuals and loopback tests. Check the repository's
-Actions runs for hosted results; local and container results are separate.
+[Actions runs](https://github.com/tkd4444/marantz-cli/actions) for hosted results;
+local and container results are separate.
 
 - No discovery: check VPN, firewall, VLAN or Wi-Fi isolation; try debug discovery,
   a validated cache or an explicit host.

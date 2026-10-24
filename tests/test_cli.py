@@ -400,6 +400,54 @@ class CLITests(unittest.TestCase):
 
 
 class TransportDeadlineTests(unittest.TestCase):
+    def test_pending_alarm_cannot_interrupt_transport_error_reporting(self):
+        # Reproduce the hosted macOS/Python 3.14 race deterministically: the
+        # socket fails first, then a still-armed alarm fires on stderr output.
+        program = """
+import runpy, signal, socket, sys
+script, fault, mode = sys.argv[1:]
+state = {'armed': False, 'handler': None}
+def install_handler(signum, handler):
+    state['handler'] = handler
+def arm_timer(which, seconds):
+    state['armed'] = bool(seconds)
+signal.signal = install_handler
+signal.setitimer = arm_timer
+class FakeSocket:
+    def settimeout(self, seconds): pass
+    def sendall(self, data): pass
+    def recv(self, size):
+        if fault == 'timeout': raise socket.timeout('timed out')
+        raise OSError('simulated receive error')
+    def close(self): pass
+def connect(*args, **kwargs):
+    if fault == 'connect-error': raise OSError('simulated connect error')
+    return FakeSocket()
+socket.create_connection = connect
+class RacingStderr:
+    def write(self, text):
+        if state['armed']:
+            state['armed'] = False
+            state['handler'](signal.SIGALRM, None)
+        return sys.__stderr__.write(text)
+    def flush(self): sys.__stderr__.flush()
+sys.stderr = RacingStderr()
+sys.argv = [script, '127.0.0.1', '23', 'PW?', mode, 'PW', '0.2', '0.2']
+runpy.run_path(script, run_name='__main__')
+"""
+        for fault, message in (("timeout", "response timeout"),
+                               ("receive-error", "transport failed"),
+                               ("connect-error", "is unreachable")):
+            for mode in ("query", "raw"):
+                with self.subTest(fault=fault, mode=mode):
+                    result = subprocess.run([sys.executable, "-c", program,
+                                             str(ROOT / "libexec" / "marantz-transport.py"), fault, mode],
+                                            text=True, capture_output=True, timeout=3)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(message, result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertEqual(result.stdout, "")
+
     def test_connection_timeout_including_resolution(self):
         # Deterministic stalled connect/resolution; no external black-hole IP.
         program = """

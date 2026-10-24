@@ -22,44 +22,49 @@ def main():
     phase = "connect"
     pending = bytearray()
     try:
-        # SIGALRM also bounds DNS resolution and the sum of address attempts.
-        signal.setitimer(signal.ITIMER_REAL, float(connect_timeout))
-        sock = socket.create_connection((host, int(port)), float(connect_timeout))
-        phase = "send"
-        signal.setitimer(signal.ITIMER_REAL, float(response_timeout))
-        sock.settimeout(float(response_timeout))
-        sock.sendall(command.encode("ascii") + b"\r")
-        sent = True
-        phase = "receive"
-        received = 0
-        while True:
-            chunk = sock.recv(1024)
-            if not chunk:
-                if pending:
-                    raise ValueError("incomplete response (missing CR)")
-                if mode == "optional":
-                    return 0
-                raise ValueError("connection closed without a matching response")
-            received += len(chunk)
-            if received > 8192:
-                raise ValueError("response exceeds 8192 bytes")
-            pending.extend(chunk)
-            while b"\r" in pending:
-                line, _, tail = pending.partition(b"\r")
-                pending = bytearray(tail.lstrip(b"\n"))
-                line = line.lstrip(b"\n")  # tolerate CRLF alongside verified CR
-                if not line:
-                    continue
-                if any(byte < 32 or byte > 126 for byte in line):
-                    raise ValueError("non-printable bytes in response")
-                response = line.decode("ascii")
-                # An MV namespace advisory is not the current numeric volume.
-                # Do not turn a maximum/limit notification into the volume value.
-                if prefix == "MV" and response.startswith("MV "):
-                    continue
-                if mode == "raw" or response.startswith(prefix):
-                    print(response)
-                    return 0
+        try:
+            # SIGALRM also bounds DNS resolution and the sum of address attempts.
+            signal.setitimer(signal.ITIMER_REAL, float(connect_timeout))
+            sock = socket.create_connection((host, int(port)), float(connect_timeout))
+            phase = "send"
+            signal.setitimer(signal.ITIMER_REAL, float(response_timeout))
+            sock.settimeout(float(response_timeout))
+            sock.sendall(command.encode("ascii") + b"\r")
+            sent = True
+            phase = "receive"
+            received = 0
+            while True:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    if pending:
+                        raise ValueError("incomplete response (missing CR)")
+                    if mode == "optional":
+                        return 0
+                    raise ValueError("connection closed without a matching response")
+                received += len(chunk)
+                if received > 8192:
+                    raise ValueError("response exceeds 8192 bytes")
+                pending.extend(chunk)
+                while b"\r" in pending:
+                    line, _, tail = pending.partition(b"\r")
+                    pending = bytearray(tail.lstrip(b"\n"))
+                    line = line.lstrip(b"\n")  # tolerate CRLF alongside verified CR
+                    if not line:
+                        continue
+                    if any(byte < 32 or byte > 126 for byte in line):
+                        raise ValueError("non-printable bytes in response")
+                    response = line.decode("ascii")
+                    # An MV namespace advisory is not the current numeric volume.
+                    # Do not turn a maximum/limit notification into the volume value.
+                    if prefix == "MV" and response.startswith("MV "):
+                        continue
+                    if mode == "raw" or response.startswith(prefix):
+                        print(response)
+                        return 0
+        finally:
+            # A socket timeout may beat SIGALRM. Cancel the alarm before
+            # diagnostics so it cannot interrupt an exception handler.
+            signal.setitimer(signal.ITIMER_REAL, 0)
     except (Deadline, socket.timeout):
         if sent and mode == "optional":
             if pending:
@@ -82,7 +87,6 @@ def main():
             print("marantz: transport failed: {}{}.".format(error, suffix), file=sys.stderr)
         return 1
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
         if sock is not None:
             sock.close()
 

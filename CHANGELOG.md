@@ -3,6 +3,9 @@
 ## 1.0.0
 
 - Release under the MIT License with the approved public copyright attribution.
+- Cancel TCP transaction alarms before reporting errors, preventing a late signal
+  from turning a socket timeout into a traceback; add deterministic regression
+  coverage for query/raw timeout and connection/receive failure diagnostics.
 
 **Marantz MODEL 40n is the ONLY device physically tested by the developer.**
 Developed and tested on Marantz MODEL 40n. Compatibility with other Marantz devices is experimental or unverified unless explicitly documented.
@@ -16,7 +19,7 @@ Other models and physical setters are not certified by this preparation.
 - Replace installation files atomically; verify repeated upgrades, permissions,
   installed manuals and uninstall preservation under temporary user prefixes.
 - Add a reusable official-image Docker matrix: Ubuntu 24.04 ARM64/AMD64 and
-  Debian 12 ARM64. Retain all 84 tests and expand the suite to 103 tests.
+  Debian 12 ARM64. Retain all 84 tests and expand the suite to 104 tests.
 - Expand CI to macos-15-intel and ubuntu-24.04 with Python 3.9/3.14 and required
   shell lint. Local/container results do not imply hosted CI or hardware success.
 - Accept documented half-step volume replies and wider source tokens; retain

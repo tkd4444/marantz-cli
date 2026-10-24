@@ -9,14 +9,14 @@ tests; other models and physical setters remain experimental/unverified.
 
 | Environment | Architecture | Bash / Python | Full suite result |
 | --- | --- | --- | --- |
-| Native macOS 26.7 | Apple Silicon ARM64 | 3.2.57 / 3.9.6 | 103 run: 101 passed, 2 Linux-only integration tests skipped |
-| Official `ubuntu:24.04`, Docker | ARM64, native Linux VM execution | 5.2.21 / 3.12.3 | 103 passed, no skips |
-| Official `ubuntu:24.04`, Docker | AMD64, emulated on Apple Silicon | 5.2.21 / 3.12.3 | 103 passed, no skips |
-| Official `debian:12`, Docker | ARM64, native Linux VM execution | 5.2.15 / 3.11.2 | 103 passed, no skips |
+| Native macOS 26.7 | Apple Silicon ARM64 | 3.2.57 / 3.9.6 | 104 run: 102 passed, 2 Linux-only integration tests skipped |
+| Official `ubuntu:24.04`, Docker | ARM64, native Linux VM execution | 5.2.21 / 3.12.3 | 104 passed, no skips |
+| Official `ubuntu:24.04`, Docker | AMD64, emulated on Apple Silicon | 5.2.21 / 3.12.3 | 104 passed, no skips |
+| Official `debian:12`, Docker | ARM64, native Linux VM execution | 5.2.15 / 3.11.2 | 104 passed, no skips |
 | macOS Intel | x86_64 | CI configured for Python 3.9 / 3.14 | Configured CI coverage; see repository Actions runs |
 | Native Ubuntu 24.04 hosted runner | AMD64 | CI configured for Python 3.9 / 3.14 | Configured CI coverage; see repository Actions runs |
 
-All 84 original tests are retained, with 19 additional focused cases. Each full
+All 84 original tests are retained, with 20 additional focused cases. Each full
 check includes Bash/Python syntax, ShellCheck, documentation links/hygiene, all
 help forms, manual lint/render, installed `man marantz`, temporary-prefix install,
 upgrade/repeat/uninstall, permissions and loopback TCP/UDP/HTTP simulations.
